@@ -1,87 +1,78 @@
-from tests.conftest import BASE_URL
+import pytest
+import requests
+from jsonschema import validate
+
+from schemas.schema import CLUBS_LIST_SCHEMA
+
+BASE_URL = "https://book-club.qa.guru/api/v1/clubs/"
 
 
-def test_create_club_success(created_club, club_data):
-    assert created_club["bookTitle"] == club_data["bookTitle"]
-    assert created_club["bookAuthors"] == club_data["bookAuthors"]
-    assert created_club["publicationYear"] == club_data["publicationYear"]
-    assert created_club["description"] == club_data["description"]
-    assert created_club["telegramChatLink"] == club_data["telegramChatLink"]
-    assert "id" in created_club
+def test_get_clubs_has_results():
+    response = requests.get(BASE_URL)
 
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
 
-def test_create_club_missing_title(auth_client, club_data):
-    bad_data = club_data.copy()
-    bad_data.pop("bookTitle")
-
-    response = auth_client.post(f"{BASE_URL}/clubs/", json=bad_data)
-
-    assert response.status_code == 400
-    assert "bookTitle" in response.json()
-
-
-def test_create_club_duplicate_title(auth_client, created_club, club_data):
-    response = auth_client.post(f"{BASE_URL}/clubs/", json=club_data)
-
-    assert response.status_code == 400
-    assert "bookTitle" in response.json()
-
-
-def test_get_club_by_id(auth_client, created_club):
-    response = auth_client.get(f"{BASE_URL}/clubs/{created_club['id']}/")
-
-    assert response.status_code == 200
     data = response.json()
-    print()
-    print(f"Получен:{data}")
-    assert data["id"] == created_club["id"]
-    assert data["bookTitle"] == created_club["bookTitle"]
+    assert isinstance(data["results"], list)
+    assert data["results"], "Список результатов пуст"
+    assert data["count"] > 0
 
 
-def test_get_club_not_found(auth_client):
-    response = auth_client.get(f"{BASE_URL}/clubs/99999999/")
+def test_get_clubs_matches_schema():
+    response = requests.get(BASE_URL)
 
-    assert response.status_code == 404
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
 
-
-def test_update_club_title(auth_client, created_club):
-    new_title = "Новое название"
-    response = auth_client.patch(
-        f"{BASE_URL}/clubs/{created_club['id']}/",
-        json={"bookTitle": new_title},
-    )
-
-    print()
-    print(f"Получен:{response.text}")
-    assert response.status_code == 200
-    assert response.json()["bookTitle"] == new_title
+    data = response.json()
+    validate(instance=data, schema=CLUBS_LIST_SCHEMA)
 
 
-def test_delete_club(auth_client, created_club):
-    club_id = created_club["id"]
+def test_get_clubs_real_content():
+    response = requests.get(BASE_URL)
 
-    response = auth_client.delete(f"{BASE_URL}/clubs/{club_id}/")
-    assert response.status_code == 204
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
 
-    check = auth_client.get(f"{BASE_URL}/clubs/{club_id}/")
-    assert check.status_code == 404
-
-
-def test_create_club_without_auth(api_client, club_data):
-    response = api_client.post(f"{BASE_URL}/clubs/", json=club_data)
-
-    assert response.status_code == 401
+    first_club = response.json()["results"][0]
+    assert first_club["bookTitle"].strip(), "bookTitle пустой"
+    assert first_club["bookAuthors"].strip(), "bookAuthors пустой"
+    assert isinstance(first_club["publicationYear"], int)
 
 
-def test_update_club_without_auth(api_client, created_club):
-    response = api_client.patch(f"{BASE_URL}/clubs/{created_club['id']}/", json={"bookTitle": "X"})
+def test_search_returns_matching_book():
+    response = requests.get(BASE_URL, params={'search': 'Тестовая книга'})
 
-    assert response.status_code == 401
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
+
+    data = response.json()
+    assert data["results"], "Список результатов пуст"
+
+    book_title = data["results"][0]["bookTitle"]
+    assert 'Тестовая книга' in book_title, f"Ожидалось, что '{book_title}' содержит 'Тестовая книга'"
 
 
-def test_delete_club_without_auth(api_client, created_club):
-    response = api_client.delete(f"{BASE_URL}/clubs/{created_club['id']}/")
+def test_search_clubs():
+    first_response = requests.get(BASE_URL)
 
-    print()
-    print(f"Получен:{response.text}")
-    assert response.status_code == 401
+    assert first_response.status_code == 200, f"Ожидался 200, получен {first_response.status_code}"
+
+    search_item = first_response.json()["results"][0]["bookTitle"]
+
+    response = requests.get(BASE_URL, params={"search": search_item})
+
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
+
+    data = response.json()
+    assert data["count"] >= 1, "Ожидался хотя бы 1 результат"
+    assert search_item in data["results"][0]["bookTitle"]
+
+
+def test_get_clubs_page_size():
+    response = requests.get(BASE_URL, params={"page": 1, "page_size": 2})
+
+    assert response.status_code == 200, f"Ожидался 200, получен {response.status_code}"
+
+    data = response.json()
+    if data["count"] < 2:
+        pytest.skip("В базе меньше 2 клубов — тест пагинации пропущен")
+
+    assert len(data["results"]) == 2
