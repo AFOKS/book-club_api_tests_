@@ -219,19 +219,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-__pycache__/
+
 *.pyc
 
-venv/
+
 .venv/
-env/
-.env
+
 
 .idea/
 
 allure-results/
 allure-report/
 
-.pytest_cache/
-
-*.log
