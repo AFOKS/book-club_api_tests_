@@ -1,56 +1,63 @@
+import logging
 import uuid
+
 import pytest
-import requests
 
-from helpers import register_user
+from client import ApiClient
+from helpers import check_status, login_user, register_user
 
-BASE_URL = "https://book-club.qa.guru/api/v1"
+log = logging.getLogger(__name__)
 
 
-@pytest.fixture
-def unique_user():
-    uid = uuid.uuid4().hex[:8]
+def _unique_user() -> dict:
     return {
-        "username": f"testuser_{uid}",
+        "username": f"testuser_{uuid.uuid4().hex[:8]}",
         "password": "TestPassword",
     }
 
 
 @pytest.fixture
+def unique_user():
+    return _unique_user()
+
+
+@pytest.fixture
 def registered_user(unique_user):
-    response = register_user(unique_user)
-    assert response.status_code == 201, f"Не удалось зарегистрировать пользователя: {response.text}"
+    check_status(register_user(unique_user), 201)
     return unique_user
 
 
 @pytest.fixture
 def api_client():
-    session = requests.Session()
-    session.headers.update({"Accept": "application/json"})
-    return session
+    return ApiClient()
+
 
 @pytest.fixture
-def auth_client(registered_user):
-    session = requests.Session()
-    session.headers.update({"Accept": "application/json"})
+def make_auth_client():
+    """Фабрика: каждый вызов регистрирует нового пользователя и возвращает авторизованного клиента."""
 
-    response = session.post(
-        f"{BASE_URL}/auth/token/",
-        json={
-            "username": registered_user["username"],
-            "password": registered_user["password"],
-        },
-    )
-    access = response.json()["access"]
-    session.headers.update({"Authorization": f"Bearer {access}"})
-    return session
+    def _make() -> ApiClient:
+        user = _unique_user()
+        check_status(register_user(user), 201)
+        response = login_user(user["username"], user["password"])
+        check_status(response, 200)
+
+        client = ApiClient()
+        client.headers["Authorization"] = f"Bearer {response.json()['access']}"
+        return client
+
+    return _make
+
+
+@pytest.fixture
+def auth_client(make_auth_client):
+    return make_auth_client()
 
 
 @pytest.fixture
 def club_data():
-    uid = uuid.uuid4().hex[:8]
     return {
-        "bookTitle": f"Тестовая книга {uid}",
+        "bookTitle": f"Тестовая книга {uuid.uuid4().hex[:8]}",
         "bookAuthors": "Тестовый автор",
         "publicationYear": 2000,
         "description": "Тестовое описание",
@@ -59,15 +66,34 @@ def club_data():
 
 
 @pytest.fixture
-def created_club(auth_client, club_data):
-    response = auth_client.post(f"{BASE_URL}/clubs/", json=club_data)
-    assert response.status_code == 201, f"Не удалось создать клуб: {response.status_code} {response.text}"
-    club = response.json()
-    print(f"\n>>> Создан клуб id={club['id']}")
+def club_factory(auth_client):
+    """Создаёт клубы с уникальными названиями и удаляет их после теста."""
+    created = []
 
-    yield club
+    def _create(**overrides) -> dict:
+        data = {
+            "bookTitle": f"Тестовая книга {uuid.uuid4().hex[:8]}",
+            "bookAuthors": "Тестовый автор",
+            "publicationYear": 2000,
+            "description": "Тестовое описание",
+            "telegramChatLink": "https://t.me/test",
+            **overrides,
+        }
+        response = auth_client.post("/clubs/", json=data)
+        check_status(response, 201)
+        club = response.json()
+        created.append(club["id"])
+        return club
 
-    print()
-    print(f">>> Удалён клуб id={club['id']}")
-    delete_response = auth_client.delete(f"{BASE_URL}/clubs/{club['id']}/")
-    print(f">>> DELETE вернул: {delete_response.status_code} {delete_response.text}")
+    yield _create
+
+    for club_id in created:
+        response = auth_client.delete(f"/clubs/{club_id}/")
+        # 404 — нормально: тест мог удалить клуб сам
+        if response.status_code not in (204, 404):
+            log.warning("Не удалось удалить клуб %s: %s %s", club_id, response.status_code, response.text)
+
+
+@pytest.fixture
+def created_club(club_factory, club_data):
+    return club_factory(**club_data)
