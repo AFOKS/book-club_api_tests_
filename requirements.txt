@@ -1,3 +1,5 @@
-requests==2.34.2
 jsonschema==4.26.0
-pytest==9.1.1pip
+jsonschema-specifications==2025.9.1
+Pygments==2.21.0
+pytest==9.1.1
+requests==2.34.2
